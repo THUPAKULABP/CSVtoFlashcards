@@ -53,10 +53,16 @@
         }
 
         .flip-card-front {
-            background: #ffffff;
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
             color: #1e293b;
-            border: 1px solid #f1f5f9;
-            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .flip-card:hover .flip-card-inner {
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            transform: translateY(-5px);
         }
 
         .flip-card-front::before {
@@ -67,6 +73,7 @@
             right: 0;
             height: 6px;
             background: linear-gradient(90deg, #6366f1, #a855f7);
+            border-radius: 1.5rem 1.5rem 0 0;
         }
 
         .flip-card-back {
@@ -74,6 +81,7 @@
             color: white;
             transform: rotateY(180deg);
             text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+            box-shadow: inset 0 0 100px rgba(0, 0, 0, 0.1);
         }
 
         /* Scrollbar styling */
@@ -157,9 +165,61 @@
         }
 
         /* Modal Animation */
-        .modal-enter {
-            animation: modalFadeIn 0.2s ease-out forwards;
+        /* Shared View Logic */
+        body.shared-view #templateBtn,
+        body.shared-view #resetBtn,
+        body.shared-view #shareLinkBtn,
+        body.shared-view #exportBtn,
+        body.shared-view #addMoreBtn,
+        body.shared-view #uploadSection {
+            display: none !important;
         }
+
+        /* Premium Background Enhancement */
+        .bg-animate {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
+            overflow: hidden;
+        }
+
+        .bg-blob {
+            position: absolute;
+            width: 500px;
+            height: 500px;
+            background: radial-gradient(circle, rgba(99, 102, 241, 0.08) 0%, transparent 70%);
+            border-radius: 50%;
+            filter: blur(80px);
+            animation: float 20s infinite alternate;
+        }
+
+        @keyframes float {
+            0% {
+                transform: translate(-10%, -10%) scale(1);
+            }
+
+            100% {
+                transform: translate(100%, 80%) scale(1.2);
+            }
+        }
+
+        .bg-blob:nth-child(2) {
+            background: radial-gradient(circle, rgba(168, 85, 247, 0.08) 0%, transparent 70%);
+            animation-delay: -5s;
+            animation-duration: 25s;
+        }
+
+        .bg-blob:nth-child(3) {
+            background: radial-gradient(circle, rgba(236, 72, 153, 0.05) 0%, transparent 70%);
+            animation-delay: -10s;
+            animation-duration: 30s;
+        }
+
+        /* Modal Animation */
 
         @keyframes modalFadeIn {
             from {
@@ -175,7 +235,12 @@
     </style>
 </head>
 
-<body class="min-h-screen flex flex-col text-slate-800">
+<body class="min-h-screen flex flex-col text-slate-800 transition-colors duration-500">
+    <div class="bg-animate">
+        <div class="bg-blob" style="top: -10%; left: -10%;"></div>
+        <div class="bg-blob" style="top: 40%; left: 60%;"></div>
+        <div class="bg-blob" style="top: 70%; left: 10%;"></div>
+    </div>
 
     <!-- Header -->
     <header class="bg-white/80 backdrop-blur-md sticky top-0 z-30 border-b border-slate-200">
@@ -190,7 +255,7 @@
                     FlashCard Gen</h1>
             </div>
             <div class="flex items-center space-x-4">
-                <button onclick="downloadTemplate()"
+                <button id="templateBtn" onclick="downloadTemplate()"
                     class="text-slate-600 hover:text-indigo-600 text-sm font-semibold transition-colors">
                     <i class="fas fa-download mr-1.5"></i> Template
                 </button>
@@ -293,11 +358,11 @@
                     class="bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-all font-medium shadow-sm active:scale-95">
                     <i class="fas fa-random mr-2 text-indigo-500"></i> Shuffle
                 </button>
-                <button onclick="openExportModal()"
+                <button id="exportBtn" onclick="openExportModal()"
                     class="bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-5 py-2.5 rounded-xl hover:shadow-lg hover:shadow-indigo-200 transition-all font-medium active:scale-95">
                     <i class="fas fa-download mr-2"></i> Download / Export
                 </button>
-                <button onclick="document.getElementById('fileInput').click()"
+                <button id="addMoreBtn" onclick="document.getElementById('fileInput').click()"
                     class="bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm font-medium active:scale-95">
                     <i class="fas fa-plus mr-2 text-slate-500"></i> Add More
                 </button>
@@ -987,6 +1052,7 @@
             }
 
             if (urlParam) {
+                document.body.classList.add('shared-view');
                 loadFromUrl(urlParam);
             }
         });
