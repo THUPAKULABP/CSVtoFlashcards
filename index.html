@@ -169,7 +169,6 @@
             box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.2);
         }
 
-        /* Modal Animation */
         /* Shared View Logic */
         body.shared-view #templateBtn,
         body.shared-view #resetBtn,
@@ -227,7 +226,6 @@
         }
 
         /* Modal Animation */
-
         @keyframes modalFadeIn {
             from {
                 opacity: 0;
@@ -238,6 +236,22 @@
                 opacity: 1;
                 transform: scale(1);
             }
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(30px) scale(0.9);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .card-anim {
+            animation: fadeIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) backwards;
         }
     </style>
 </head>
@@ -344,16 +358,24 @@
         <!-- Controls (Hidden initially) -->
         <div id="controls"
             class="hidden max-w-7xl mx-auto mb-8 flex flex-col sm:flex-row gap-4 justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
-            <div class="flex items-center space-x-4 text-slate-700 font-semibold px-2">
-                <div class="flex items-center space-x-2">
-                    <span class="bg-indigo-100 text-indigo-700 py-1 px-3 rounded-lg text-sm" id="cardCount">0</span>
-                    <span>Total</span>
+            <div class="flex flex-col sm:flex-row items-center gap-4 w-full sm:w-auto px-2">
+                <div class="flex items-center space-x-4 text-slate-700 font-semibold min-w-fit">
+                    <div class="flex items-center space-x-2">
+                        <span class="bg-indigo-100 text-indigo-700 py-1 px-3 rounded-lg text-sm" id="cardCount">0</span>
+                        <span>Total</span>
+                    </div>
+                    <div id="selectionCountContainer" class="hidden flex items-center space-x-2 text-indigo-600">
+                        <span class="bg-indigo-600 text-white py-1 px-3 rounded-lg text-sm" id="selectedCount">0</span>
+                        <span>Selected</span>
+                        <button onclick="clearSelection()"
+                            class="text-xs underline ml-2 hover:text-indigo-800">Clear</button>
+                    </div>
                 </div>
-                <div id="selectionCountContainer" class="hidden flex items-center space-x-2 text-indigo-600">
-                    <span class="bg-indigo-600 text-white py-1 px-3 rounded-lg text-sm" id="selectedCount">0</span>
-                    <span>Selected</span>
-                    <button onclick="clearSelection()"
-                        class="text-xs underline ml-2 hover:text-indigo-800">Clear</button>
+                <!-- Search Bar -->
+                <div class="relative w-full sm:w-64">
+                    <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
+                    <input type="text" id="searchInput" oninput="filterCards()" placeholder="Search cards..."
+                        class="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none transition-all text-sm">
                 </div>
             </div>
             <div class="flex flex-wrap justify-center sm:justify-end gap-3 w-full sm:w-auto">
@@ -605,13 +627,14 @@
             return result;
         }
 
-        function renderCards(data) {
+        function renderCards(data, skipAnimation = false) {
             cardsContainer.innerHTML = '';
-            cardCountLabel.innerText = data.length;
 
-            // Calculate selected count
-            const selectedCount = data.filter(c => c.selected).length;
+            // Counters should check full data, not just filtered view
+            cardCountLabel.innerText = currentData.length;
+            const selectedCount = currentData.filter(c => c.selected).length;
             selectedCountLabel.innerText = selectedCount;
+
             if (selectedCount > 0) {
                 selectionCountContainer.classList.remove('hidden');
             } else {
@@ -619,18 +642,19 @@
             }
 
             if (data.length === 0) {
-                cardsContainer.innerHTML = '<div class="col-span-full text-center text-slate-400 py-10 text-lg">No data found in CSV.</div>';
+                cardsContainer.innerHTML = '<div class="col-span-full text-center text-slate-400 py-10 text-lg">No cards found.</div>';
                 return;
             }
 
             data.forEach((cardData, index) => {
                 const card = document.createElement('div');
                 card.className = `flip-card h-72 perspective-1000 group ${cardData.selected ? 'selected' : ''}`;
+                card.dataset.index = cardData._originalIndex !== undefined ? cardData._originalIndex : index;
 
-                // Only animate if it's a fresh load or shuffle (simplified for performance)
-                if (!card.style.animation) {
+                if (!skipAnimation) {
                     const delay = Math.min(index * 0.05, 1);
-                    card.style.animation = `fadeIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) ${delay}s backwards`;
+                    card.classList.add('card-anim');
+                    card.style.animationDelay = `${delay}s`;
                 }
 
                 card.innerHTML = `
@@ -646,7 +670,7 @@
                                 <i class="fas fa-pencil-alt"></i>
                             </button>
                             <div class="card-content flex flex-col items-center justify-center text-center h-full w-full px-2">
-                                <h3 class="text-xl font-bold leading-relaxed text-slate-800 break-words w-full">${escapeHtml(cardData.front)}</h3>
+                                <h3 class="text-xl font-bold font-['Outfit'] leading-relaxed text-slate-800 break-words w-full">${escapeHtml(cardData.front)}</h3>
                             </div>
                             <div class="mt-auto pt-4 text-[10px] text-slate-400 font-bold uppercase tracking-widest opacity-60">Tap to Flip</div>
                         </div>
@@ -654,7 +678,7 @@
                         <!-- Back -->
                         <div class="flip-card-back" onclick="handleCardClick(${index}, event)">
                             <div class="card-content flex flex-col items-center justify-center text-center h-full w-full px-2">
-                                <p class="text-lg font-medium leading-relaxed text-white/95 break-words w-full">${escapeHtml(cardData.back)}</p>
+                                <p class="text-lg font-medium font-['Outfit'] leading-relaxed text-white/95 break-words w-full">${escapeHtml(cardData.back)}</p>
                             </div>
                         </div>
                     </div>
@@ -664,8 +688,6 @@
         }
 
         function handleCardClick(index, event) {
-            // Only flip if we didn't click checkbox or edit button
-            // This is handled via bubbling, but we can double check target if needed
             event.currentTarget.parentElement.parentElement.classList.toggle('flipped');
         }
 
@@ -673,11 +695,24 @@
 
         function toggleSelection(index, event) {
             event.stopPropagation(); // Stop flip
-            currentData[index].selected = !currentData[index].selected;
+            const cardElement = event.target.closest('.flip-card');
+            const dataIndex = cardElement ? parseInt(cardElement.dataset.index) : index;
 
-            // Re-render just the styling for efficiency? Or full render. 
-            // Full render is safer for keeping counters in sync.
-            renderCards(currentData);
+            currentData[dataIndex].selected = !currentData[dataIndex].selected;
+
+            if (cardElement) {
+                cardElement.classList.toggle('selected');
+                const checkbox = cardElement.querySelector('.card-checkbox');
+                if (checkbox) checkbox.checked = currentData[dataIndex].selected;
+            }
+
+            const selectedCount = currentData.filter(c => c.selected).length;
+            selectedCountLabel.innerText = selectedCount;
+            if (selectedCount > 0) {
+                selectionCountContainer.classList.remove('hidden');
+            } else {
+                selectionCountContainer.classList.add('hidden');
+            }
         }
 
         function clearSelection() {
@@ -696,7 +731,6 @@
             editBackInput.value = card.back;
 
             editModal.classList.remove('hidden');
-            // Trigger animation
             requestAnimationFrame(() => {
                 editModal.classList.remove('opacity-0');
                 editModalContent.classList.remove('scale-95');
@@ -731,14 +765,13 @@
             exportTotalCountLabel.innerText = currentData.length;
             exportSelectedCountLabel.innerText = selectedCount;
 
-            // Handle radio buttons logic
             const allRadio = document.querySelector('input[name="exportOption"][value="all"]');
             const selectedRadio = document.querySelector('input[name="exportOption"][value="selected"]');
 
             if (selectedCount > 0) {
                 exportSelectedLabel.classList.remove('opacity-50', 'pointer-events-none');
                 selectedRadio.disabled = false;
-                selectedRadio.checked = true; // Auto-select "Selected" if items are selected
+                selectedRadio.checked = true;
             } else {
                 exportSelectedLabel.classList.add('opacity-50', 'pointer-events-none');
                 selectedRadio.disabled = true;
@@ -763,7 +796,6 @@
                 dataToExport = currentData.filter(c => c.selected);
             }
 
-            // Generate clean data (remove internal 'selected' flag)
             const cleanData = dataToExport.map(({ front, back }) => ({ front, back }));
             exportCodeTextarea.value = generateStandaloneHTML(cleanData);
         }
@@ -807,9 +839,6 @@
 
         function generateStandaloneHTML(data) {
             const cardsDataJSON = JSON.stringify(data).replace(/<\/script>/g, '<\\/script>');
-
-            // We fetch the styles by ID to ensure we get exactly the custom CSS, 
-            // ignoring any injected styles from extensions or Tailwind CDN.
             const styles = document.getElementById('app-styles').innerHTML;
 
             return `<!DOCTYPE html>
@@ -827,6 +856,14 @@
         .edit-btn, .card-checkbox { display: none !important; }
         .flip-card.selected .flip-card-front { border-color: #f1f5f9; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); }
         body { padding-bottom: 40px; }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(30px) scale(0.9); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .card-anim {
+            animation: fadeIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) backwards;
+        }
     </style>
 </head>
 <body class="min-h-screen flex flex-col text-slate-800">
@@ -838,9 +875,7 @@
                 </div>
                 <h1 class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-slate-800 to-slate-600">My Flashcards</h1>
             </div>
-             <div class="text-sm text-slate-500 font-medium">
-                ${data.length} Cards
-            </div>
+             <div class="text-sm text-slate-500 font-medium">${data.length} Cards</div>
         </div>
     </header>
 
@@ -864,9 +899,9 @@
             cardsContainer.innerHTML = '';
             data.forEach((cardData, index) => {
                 const card = document.createElement('div');
-                card.className = 'flip-card h-72 perspective-1000 group'; 
+                card.className = 'flip-card h-72 perspective-1000 group card-anim'; 
                 const delay = Math.min(index * 0.05, 1); 
-                card.style.animation = \`fadeIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) \${delay}s backwards\`;
+                card.style.animationDelay = \`\${delay}s\`;
 
                 card.innerHTML = \`
                     <div class="flip-card-inner">
@@ -911,7 +946,15 @@
                 const j = Math.floor(Math.random() * (i + 1));
                 [currentData[i], currentData[j]] = [currentData[j], currentData[i]];
             }
-            renderCards(currentData);
+            renderCards(currentData, false);
+        }
+
+        function filterCards() {
+            const query = document.getElementById('searchInput').value.toLowerCase();
+            const filtered = currentData.map((card, index) => ({ ...card, _originalIndex: index }))
+                .filter(card => card.front.toLowerCase().includes(query) ||
+                    card.back.toLowerCase().includes(query));
+            renderCards(filtered, true);
         }
 
         function resetApp() {
@@ -922,7 +965,6 @@
             controls.classList.add('hidden');
             resetBtn.classList.add('hidden');
 
-            // Re-hide share button and clear URL params
             document.getElementById('shareLinkBtn').classList.add('hidden');
             const newUrl = new URL(window.location.href);
             newUrl.searchParams.delete('url');
@@ -952,15 +994,6 @@
                 .replace(/\n/g, "<br>");
         }
 
-        const styleSheet = document.createElement("style");
-        styleSheet.innerText = `
-            @keyframes fadeIn {
-                from { opacity: 0; transform: translateY(30px) scale(0.9); }
-                to { opacity: 1; transform: translateY(0) scale(1); }
-            }
-        `;
-        document.head.appendChild(styleSheet);
-
         async function loadFromUrl(url) {
             const loadBtn = document.getElementById('loadUrlBtn');
             const originalContent = loadBtn ? loadBtn.innerHTML : null;
@@ -971,23 +1004,34 @@
 
             try {
                 let downloadUrl = getGoogleDriveDownloadUrl(url);
-                // Use a proxy to avoid CORS issues
-                const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(downloadUrl)}`;
+                let text = "";
 
-                const response = await fetch(proxyUrl);
-                if (!response.ok) throw new Error("Failed to fetch CSV content.");
-                const text = await response.text();
+                // Try corsproxy.io first (generally faster and more reliable)
+                try {
+                    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(downloadUrl)}`;
+                    const response = await fetch(proxyUrl);
+                    if (response.ok) {
+                        text = await response.text();
+                    }
+                } catch (e) {
+                    console.warn("Primary proxy failed, trying fallback...", e);
+                }
 
+                // Fallback to AllOrigins if first attempt failed
                 if (!text || text.trim() === "") {
-                    throw new Error("CSV file is empty or inaccessible. Is it shared correctly?");
+                    const fallbackUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(downloadUrl)}`;
+                    const response = await fetch(fallbackUrl);
+                    if (!response.ok) throw new Error("Could not reach the file. Please check sharing permissions.");
+                    text = await response.text();
+                }
+
+                if (!text || text.trim() === "" || text.startsWith("<!DOCTYPE html>")) {
+                    throw new Error("The URL did not return a valid CSV file. Make sure it's shared with 'Anyone with the link'.");
                 }
 
                 processCSV(text);
-
-                // Show share button if loaded from URL
                 document.getElementById('shareLinkBtn').classList.remove('hidden');
 
-                // Update URL in browser for "Permanent Link"
                 const newUrl = new URL(window.location.href);
                 newUrl.searchParams.set('url', url);
                 if (document.getElementById('hasHeader').checked) {
@@ -999,7 +1043,7 @@
 
             } catch (error) {
                 console.error(error);
-                alert("Error loading CSV: " + error.message + "\n\n1. Ensure the file is shared with 'Anyone with the link'\n2. Ensure it's a direct CSV link or Google Drive link.\n3. Try again in a few seconds.");
+                alert("Error: " + error.message);
             } finally {
                 if (loadBtn) {
                     loadBtn.innerHTML = originalContent;
@@ -1024,10 +1068,10 @@
             if (fileMatch) {
                 return `https://drive.google.com/uc?export=download&id=${fileMatch[1]}`;
             }
-            // Check for Google Sheet link
+            // Check for Google Sheet link - Using gviz/tq endpoint which is often faster
             const sheetMatch = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
             if (sheetMatch) {
-                return `https://docs.google.com/spreadsheets/d/${sheetMatch[1]}/export?format=csv`;
+                return `https://docs.google.com/spreadsheets/d/${sheetMatch[1]}/gviz/tq?tqx=out:csv`;
             }
             return url;
         }
@@ -1048,7 +1092,6 @@
             });
         }
 
-        // Check for URL parameter on load
         window.addEventListener('DOMContentLoaded', () => {
             const params = new URLSearchParams(window.location.search);
             const urlParam = params.get('url');
