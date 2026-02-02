@@ -238,6 +238,10 @@
             }
         }
 
+        .animate-in {
+            animation: modalFadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
         @keyframes fadeIn {
             from {
                 opacity: 0;
@@ -253,10 +257,134 @@
         .card-anim {
             animation: fadeIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) backwards;
         }
+
+        /* Loading Overlay */
+        #loadingOverlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(248, 250, 252, 0.8);
+            backdrop-filter: blur(12px);
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .loader-box {
+            position: relative;
+            width: 100px;
+            height: 100px;
+        }
+
+        .loader-ring {
+            position: absolute;
+            inset: 0;
+            border: 4px solid transparent;
+            border-top-color: #6366f1;
+            border-radius: 50%;
+            animation: spin 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+        }
+
+        .loader-ring:nth-child(2) {
+            border-top-color: #a855f7;
+            animation-delay: -0.3s;
+            border-width: 3px;
+            margin: 10px;
+        }
+
+        .loader-ring:nth-child(3) {
+            border-top-color: #ec4899;
+            animation-delay: -0.6s;
+            border-width: 2px;
+            margin: 20px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .loading-text {
+            margin-top: 2rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+
+            50% {
+                opacity: 0.7;
+                transform: scale(0.98);
+            }
+        }
+
+        #loadingOverlay.fade-out {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
     </style>
 </head>
 
 <body class="min-h-screen flex flex-col text-slate-800 transition-colors duration-500">
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="hidden">
+        <div id="loaderContent" class="flex flex-col items-center">
+            <div class="loader-box">
+                <div class="loader-ring"></div>
+                <div class="loader-ring"></div>
+                <div class="loader-ring"></div>
+            </div>
+            <div id="loadingText" class="loading-text uppercase text-sm">Preparing your flashcards</div>
+        </div>
+        <div id="loaderError" class="hidden max-w-md w-full px-6 text-center animate-in fade-in zoom-in duration-300">
+            <div class="bg-white p-8 rounded-3xl shadow-2xl border border-red-100">
+                <div
+                    class="w-16 h-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <i class="fas fa-exclamation-triangle text-2xl"></i>
+                </div>
+                <h3 class="text-xl font-bold text-slate-800 mb-2">Oops! Something went wrong</h3>
+                <p id="errorMsg" class="text-slate-600 mb-6 text-sm"></p>
+                <div class="flex flex-col gap-3">
+                    <button onclick="window.location.reload()"
+                        class="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-indigo-700 transition-all">
+                        Try Again
+                    </button>
+                    <button onclick="clearLoadingError()"
+                        class="text-slate-500 hover:text-slate-700 font-medium text-sm">
+                        Go back to Upload
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Immediate check for shared view to prevent flash
+        if (window.location.search.includes('url=')) {
+            document.body.classList.add('shared-view');
+            document.getElementById('loadingOverlay').classList.remove('hidden');
+        }
+    </script>
+
     <div class="bg-animate">
         <div class="bg-blob" style="top: -10%; left: -10%;"></div>
         <div class="bg-blob" style="top: 40%; left: 60%;"></div>
@@ -995,8 +1123,14 @@
         }
 
         async function loadFromUrl(url) {
+            const loadingOverlay = document.getElementById('loadingOverlay');
             const loadBtn = document.getElementById('loadUrlBtn');
             const originalContent = loadBtn ? loadBtn.innerHTML : null;
+
+            // Show loading state
+            if (loadingOverlay) {
+                loadingOverlay.classList.remove('hidden', 'fade-out');
+            }
             if (loadBtn) {
                 loadBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Loading...';
                 loadBtn.disabled = true;
@@ -1005,28 +1139,46 @@
             try {
                 let downloadUrl = getGoogleDriveDownloadUrl(url);
                 let text = "";
+                let errorDetails = "";
 
-                // Try corsproxy.io first (generally faster and more reliable)
-                try {
-                    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(downloadUrl)}`;
-                    const response = await fetch(proxyUrl);
-                    if (response.ok) {
-                        text = await response.text();
+                // List of proxies to try in order
+                const proxies = [
+                    (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+                    (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+                    (u) => `https://thingproxy.freeboard.io/fetch/${u}`
+                ];
+
+                for (const getProxy of proxies) {
+                    try {
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+                        const response = await fetch(getProxy(downloadUrl), { signal: controller.signal });
+                        clearTimeout(timeoutId);
+
+                        if (response.ok) {
+                            const result = await response.text();
+
+                            // Check if it's actually CSV or a Google warning page
+                            if (result && result.trim() !== "" && !result.includes("<!DOCTYPE html>") && !result.includes("Google Drive - Virus scan warning")) {
+                                text = result;
+                                break;
+                            } else if (result.includes("Google Drive - Virus scan warning") || result.includes("sharing permission")) {
+                                errorDetails = "Google Drive security check or permission issue.";
+                            }
+                        }
+                    } catch (e) {
+                        console.warn(`Proxy failed:`, e);
+                        errorDetails = e.message;
                     }
-                } catch (e) {
-                    console.warn("Primary proxy failed, trying fallback...", e);
                 }
 
-                // Fallback to AllOrigins if first attempt failed
                 if (!text || text.trim() === "") {
-                    const fallbackUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(downloadUrl)}`;
-                    const response = await fetch(fallbackUrl);
-                    if (!response.ok) throw new Error("Could not reach the file. Please check sharing permissions.");
-                    text = await response.text();
-                }
-
-                if (!text || text.trim() === "" || text.startsWith("<!DOCTYPE html>")) {
-                    throw new Error("The URL did not return a valid CSV file. Make sure it's shared with 'Anyone with the link'.");
+                    let msg = "Could not reach the file. ";
+                    if (url.includes("drive.google.com")) {
+                        msg += "\n\nTips for Google Drive:\n1. Ensure 'Anyone with the link' can View.\n2. Ensure it's a CSV file or Google Sheet.\n3. Try copying the link again.";
+                    }
+                    throw new Error(msg);
                 }
 
                 processCSV(text);
@@ -1043,13 +1195,55 @@
 
             } catch (error) {
                 console.error(error);
-                alert("Error: " + error.message);
+                showLoadingError(error.message);
             } finally {
                 if (loadBtn) {
                     loadBtn.innerHTML = originalContent;
                     loadBtn.disabled = false;
                 }
+                // Don't auto-hide if there's an error
+                if (loadingOverlay && !loadingOverlay.querySelector('#loaderError').classList.contains('hidden')) {
+                    // Stay visible
+                } else if (loadingOverlay) {
+                    loadingOverlay.classList.add('fade-out');
+                    setTimeout(() => loadingOverlay.classList.add('hidden'), 500);
+                }
             }
+        }
+
+        function showLoadingError(msg) {
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            const loaderContent = document.getElementById('loaderContent');
+            const loaderError = document.getElementById('loaderError');
+            const errorMsg = document.getElementById('errorMsg');
+
+            if (loadingOverlay) {
+                loadingOverlay.classList.remove('hidden', 'fade-out');
+                loaderContent.classList.add('hidden');
+                loaderError.classList.remove('hidden');
+                errorMsg.innerText = msg;
+            } else {
+                alert("Error: " + msg);
+            }
+        }
+
+        function clearLoadingError() {
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            loadingOverlay.classList.add('fade-out');
+            setTimeout(() => {
+                loadingOverlay.classList.add('hidden');
+                document.getElementById('loaderContent').classList.remove('hidden');
+                document.getElementById('loaderError').classList.add('hidden');
+
+                // Show upload section
+                document.body.classList.remove('shared-view');
+                uploadSection.classList.remove('hidden');
+
+                // Clear URL to prevent re-load on refresh
+                const newUrl = new URL(window.location.href);
+                newUrl.searchParams.delete('url');
+                window.history.replaceState({}, '', newUrl);
+            }, 500);
         }
 
         function handleUrlUpload() {
