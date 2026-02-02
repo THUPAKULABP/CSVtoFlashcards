@@ -1122,14 +1122,21 @@
                 .replace(/\n/g, "<br>");
         }
 
-        async function loadFromUrl(url) {
+        async function loadFromUrl(url, isRetry = false) {
             const loadingOverlay = document.getElementById('loadingOverlay');
             const loadBtn = document.getElementById('loadUrlBtn');
             const originalContent = loadBtn ? loadBtn.innerHTML : null;
 
+            if (!navigator.onLine) {
+                showLoadingError("No internet connection. Please check your network and try again.");
+                return;
+            }
+
             // Show loading state
             if (loadingOverlay) {
                 loadingOverlay.classList.remove('hidden', 'fade-out');
+                document.getElementById('loaderContent').classList.remove('hidden');
+                document.getElementById('loaderError').classList.add('hidden');
             }
             if (loadBtn) {
                 loadBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Loading...';
@@ -1139,44 +1146,62 @@
             try {
                 let downloadUrl = getGoogleDriveDownloadUrl(url);
                 let text = "";
-                let errorDetails = "";
+                let lastError = "";
 
-                // List of proxies to try in order
+                // List of proxies to try
                 const proxies = [
                     (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
                     (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
                     (u) => `https://thingproxy.freeboard.io/fetch/${u}`
                 ];
 
-                for (const getProxy of proxies) {
-                    try {
-                        const controller = new AbortController();
-                        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+                // Strategy: Try each proxy with a retry
+                for (let pIndex = 0; pIndex < proxies.length; pIndex++) {
+                    const getProxy = proxies[pIndex];
 
-                        const response = await fetch(getProxy(downloadUrl), { signal: controller.signal });
-                        clearTimeout(timeoutId);
+                    for (let attempt = 1; attempt <= 2; attempt++) {
+                        try {
+                            const controller = new AbortController();
+                            const timeoutId = setTimeout(() => controller.abort(), 12000); // 12s timeout
 
-                        if (response.ok) {
-                            const result = await response.text();
+                            const response = await fetch(getProxy(downloadUrl), { signal: controller.signal });
+                            clearTimeout(timeoutId);
 
-                            // Check if it's actually CSV or a Google warning page
-                            if (result && result.trim() !== "" && !result.includes("<!DOCTYPE html>") && !result.includes("Google Drive - Virus scan warning")) {
-                                text = result;
-                                break;
-                            } else if (result.includes("Google Drive - Virus scan warning") || result.includes("sharing permission")) {
-                                errorDetails = "Google Drive security check or permission issue.";
+                            if (response.ok) {
+                                const result = await response.text();
+
+                                // Check if it's a Google Drive confirmation page
+                                if (result.includes("confirm=") && result.includes("drive.google.com")) {
+                                    const confirmToken = result.match(/confirm=([a-zA-Z0-9_-]+)/)?.[1];
+                                    if (confirmToken) {
+                                        downloadUrl += `&confirm=${confirmToken}`;
+                                        // Retry immediately with the token using the same proxy
+                                        continue;
+                                    }
+                                }
+
+                                // Check if it's actually CSV content (simple check for commas or structure)
+                                if (result && result.trim() !== "" && !result.includes("<!DOCTYPE html>") && !result.includes("Google Drive - Virus scan warning")) {
+                                    text = result;
+                                    break;
+                                }
                             }
+                        } catch (e) {
+                            console.warn(`Proxy ${pIndex} attempt ${attempt} failed:`, e);
+                            lastError = e.message;
                         }
-                    } catch (e) {
-                        console.warn(`Proxy failed:`, e);
-                        errorDetails = e.message;
+                        // Wait a bit before next attempt if it's a retry
+                        if (!text && attempt < 2) await new Promise(r => setTimeout(r, 1000));
                     }
+                    if (text) break;
                 }
 
                 if (!text || text.trim() === "") {
                     let msg = "Could not reach the file. ";
                     if (url.includes("drive.google.com")) {
-                        msg += "\n\nTips for Google Drive:\n1. Ensure 'Anyone with the link' can View.\n2. Ensure it's a CSV file or Google Sheet.\n3. Try copying the link again.";
+                        msg += "\n\nTips for Google Drive:\n1. Ensure 'Anyone with the link' can View.\n2. Ensure it's a CSV file or Google Sheet.\n3. Large files may trigger virus warnings.";
+                    } else {
+                        msg += lastError || "The server might be down or blocking the request.";
                     }
                     throw new Error(msg);
                 }
@@ -1184,6 +1209,7 @@
                 processCSV(text);
                 document.getElementById('shareLinkBtn').classList.remove('hidden');
 
+                // Update URL state
                 const newUrl = new URL(window.location.href);
                 newUrl.searchParams.set('url', url);
                 if (document.getElementById('hasHeader').checked) {
@@ -1194,24 +1220,22 @@
                 window.history.replaceState({}, '', newUrl);
 
             } catch (error) {
-                console.error(error);
-                showLoadingError(error.message);
+                console.error("Load failed:", error);
+                showLoadingError(error.message, url);
             } finally {
                 if (loadBtn) {
                     loadBtn.innerHTML = originalContent;
                     loadBtn.disabled = false;
                 }
-                // Don't auto-hide if there's an error
-                if (loadingOverlay && !loadingOverlay.querySelector('#loaderError').classList.contains('hidden')) {
-                    // Stay visible
-                } else if (loadingOverlay) {
+                const loaderError = document.getElementById('loaderError');
+                if (loadingOverlay && loaderError.classList.contains('hidden')) {
                     loadingOverlay.classList.add('fade-out');
                     setTimeout(() => loadingOverlay.classList.add('hidden'), 500);
                 }
             }
         }
 
-        function showLoadingError(msg) {
+        function showLoadingError(msg, url = "") {
             const loadingOverlay = document.getElementById('loadingOverlay');
             const loaderContent = document.getElementById('loaderContent');
             const loaderError = document.getElementById('loaderError');
@@ -1222,6 +1246,14 @@
                 loaderContent.classList.add('hidden');
                 loaderError.classList.remove('hidden');
                 errorMsg.innerText = msg;
+
+                // Add retry button context
+                const retryBtn = loaderError.querySelector('button');
+                if (url) {
+                    retryBtn.onclick = () => loadFromUrl(url, true);
+                } else {
+                    retryBtn.onclick = () => window.location.reload();
+                }
             } else {
                 alert("Error: " + msg);
             }
@@ -1286,7 +1318,7 @@
             });
         }
 
-        window.addEventListener('DOMContentLoaded', () => {
+        window.addEventListener('DOMContentLoaded', async () => {
             const params = new URLSearchParams(window.location.search);
             const urlParam = params.get('url');
             const headerParam = params.get('header');
@@ -1298,6 +1330,43 @@
             if (urlParam) {
                 document.body.classList.add('shared-view');
                 loadFromUrl(urlParam);
+            } else if (params.get('v') === 'lesson' && params.get('c')) {
+                // Handle direct lesson links like the one in the screenshot
+                document.body.classList.add('shared-view');
+                document.getElementById('loadingOverlay').classList.remove('hidden');
+
+                try {
+                    const classId = params.get('c');
+                    const subjectId = params.get('s');
+                    const chapterId = params.get('ch');
+                    const resourceKey = params.get('res') || 'worksheet';
+
+                    // Fetch master data to find the URL
+                    const dataUrl = `https://sri-guru-dakshinamurthy.pages.dev/data/class-${classId}.json`;
+                    const response = await fetch(dataUrl);
+                    if (!response.ok) throw new Error("Could not find class data.");
+
+                    const classData = await response.json();
+                    const subject = classData.subjects.find(s => s.id === subjectId);
+                    if (!subject) throw new Error("Subject not found.");
+
+                    const chapter = subject.chapters.find(c => String(c.id) === String(chapterId));
+                    if (!chapter) throw new Error("Chapter not found.");
+
+                    let targetUrl = chapter.resources?.[resourceKey];
+                    if (!targetUrl) throw new Error("Resource not found for this chapter.");
+
+                    // If the URL is already a flashcard link, extract the ?url= part
+                    if (targetUrl.includes('?url=')) {
+                        const urlMatch = targetUrl.match(/[?&]url=([^&]+)/);
+                        if (urlMatch) targetUrl = decodeURIComponent(urlMatch[1]);
+                    }
+
+                    loadFromUrl(targetUrl);
+                } catch (e) {
+                    console.error("Parameter resolve failed:", e);
+                    showLoadingError("Could not resolve lesson data: " + e.message);
+                }
             }
         });
 
