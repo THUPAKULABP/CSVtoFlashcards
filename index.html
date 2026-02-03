@@ -1157,19 +1157,32 @@
             }
 
             try {
+                // Session caching check - prevents redundant network hits
+                const cachedContent = sessionStorage.getItem(`csv_content_${url}`);
+                if (cachedContent) {
+                    processCSV(cachedContent);
+                    if (window._loadTimeout) clearTimeout(window._loadTimeout);
+                    return;
+                }
+
                 let downloadUrl = getGoogleDriveDownloadUrl(url);
                 let text = "";
                 let lastError = "";
 
-                // List of proxies to try - Reordered for speed
+                // List of proxies to try
                 const proxies = [
                     (u) => `https://corsproxy.org/?url=${encodeURIComponent(u)}`,
                     (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
                     (u) => `https://proxy.cors.sh/${u}`,
                     (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
                     (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
-                    (u) => `https://thingproxy.freeboard.io/fetch/${u}`
+                    (u) => `https://thingproxy.freeboard.io/fetch/${u}`,
+                    (u) => `https://cors-anywhere.herokuapp.com/${u}`,
+                    (u) => `https://yacdn.org/proxy/${u}`
                 ];
+
+                // Shuffle proxies to avoid hitting rate limits on the same one every time
+                const shuffledProxies = proxies.sort(() => Math.random() - 0.5);
 
                 // racing function to speed up loading
                 async function fetchWithProxy(getProxy, targetUrl, timeoutMs) {
@@ -1177,52 +1190,51 @@
                     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
                     try {
                         const finalUrl = getProxy(targetUrl);
-                        const response = await fetch(finalUrl, {
+                        const response = await fetch(finalUrl, { 
                             signal: controller.signal,
                             headers: { 'X-Requested-With': 'XMLHttpRequest' }
                         });
                         clearTimeout(timeoutId);
                         if (!response.ok) throw new Error(`Status ${response.status}`);
                         const result = await response.text();
-
+                        
                         // Handle Google Drive confirmation page
                         if (result.includes("confirm=") && (result.includes("drive.google.com") || result.includes("Google Drive") || result.includes("Virus scan warning"))) {
-                            const confirmToken = result.match(/confirm=([a-zA-Z0-9_-]+)/)?.[1] ||
-                                result.match(/id="confirm-button".*?href=.*?confirm=([a-zA-Z0-9_-]+)/)?.[1] ||
-                                result.match(/confirm=([^&"]+)/)?.[1];
+                            const confirmToken = result.match(/confirm=([a-zA-Z0-9_-]+)/)?.[1] || 
+                                                 result.match(/id="confirm-button".*?href=.*?confirm=([a-zA-Z0-9_-]+)/)?.[1] ||
+                                                 result.match(/confirm=([^&"]+)/)?.[1];
                             if (confirmToken && !targetUrl.includes('confirm=')) {
                                 return await fetchWithProxy(getProxy, targetUrl + `&confirm=${confirmToken}`, timeoutMs + 5000);
                             }
                         }
 
-                        // Validate content
+                        // Validate content - ensure it looks like CSV or at least not HTML
                         if (result && result.trim() !== "" && !result.includes("<!DOCTYPE html>") && !result.includes("document.location.href")) {
                             return result;
                         }
-                        throw new Error("Invalid content received");
+                        throw new Error("Invalid content or throttled");
                     } catch (e) {
                         clearTimeout(timeoutId);
                         throw e;
                     }
                 }
 
-                // Race the first 2 proxies for maximum speed
+                // Race the first 3 proxies for maximum resilience against rate limits
                 try {
-                    const p1 = fetchWithProxy(proxies[0], downloadUrl, 8000);
-                    // Start second proxy after a short delay if p1 is slow
+                    const p1 = fetchWithProxy(shuffledProxies[0], downloadUrl, 8000);
                     const p2 = new Promise((resolve, reject) => {
-                        setTimeout(() => {
-                            fetchWithProxy(proxies[1], downloadUrl, 10000).then(resolve).catch(reject);
-                        }, 2000);
+                        setTimeout(() => fetchWithProxy(shuffledProxies[1], downloadUrl, 10000).then(resolve).catch(reject), 1500);
+                    });
+                    const p3 = new Promise((resolve, reject) => {
+                        setTimeout(() => fetchWithProxy(shuffledProxies[2], downloadUrl, 12000).then(resolve).catch(reject), 3000);
                     });
 
-                    text = await Promise.any([p1, p2]);
+                    text = await Promise.any([p1, p2, p3]);
                 } catch (e) {
-                    console.warn("Primary race failed, trying sequential backups...");
-                    // Sequential fallback for remaining proxies
-                    for (let i = 2; i < proxies.length; i++) {
+                    console.warn("Primary race failed, trying remaining backups sequentially...");
+                    for (let i = 3; i < shuffledProxies.length; i++) {
                         try {
-                            text = await fetchWithProxy(proxies[i], downloadUrl, 12000);
+                            text = await fetchWithProxy(shuffledProxies[i], downloadUrl, 12000);
                             if (text) break;
                         } catch (err) {
                             lastError = err.message;
@@ -1232,14 +1244,11 @@
                 }
 
                 if (!text || text.trim() === "") {
-                    let msg = "Could not reach the file. ";
-                    if (url.includes("drive.google.com") || url.includes("docs.google.com")) {
-                        msg += "\n\nTips for Google Drive:\n1. Ensure 'Anyone with the link' can View.\n2. Ensure it's a CSV file or Google Sheet.\n3. Large files may require a moment to process.";
-                    } else {
-                        msg += "The server might be down or blocking the request. " + (lastError ? `(${lastError})` : "");
-                    }
-                    throw new Error(msg);
+                    throw new Error("Could not reach the file. All available routes are currently busy or throttled.");
                 }
+
+                // Cache for the current session to make re-loads instant
+                sessionStorage.setItem(`csv_content_${url}`, text);
 
                 if (window._loadTimeout) {
                     clearTimeout(window._loadTimeout);
