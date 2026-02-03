@@ -383,7 +383,7 @@
         if (initialParams.has('url') || (initialParams.get('v') === 'lesson' && initialParams.get('c'))) {
             document.body.classList.add('shared-view');
             document.getElementById('loadingOverlay').classList.remove('hidden');
-            
+
             // Safety timeout: if still loading after 45s, show an error to prevent getting stuck
             window._loadTimeout = setTimeout(() => {
                 const overlay = document.getElementById('loadingOverlay');
@@ -1161,89 +1161,86 @@
                 let text = "";
                 let lastError = "";
 
-                // List of proxies to try
+                // List of proxies to try - Reordered for speed
                 const proxies = [
-                    (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+                    (u) => `https://corsproxy.org/?url=${encodeURIComponent(u)}`,
                     (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
                     (u) => `https://proxy.cors.sh/${u}`,
-                    (u) => `https://corsproxy.org/?url=${encodeURIComponent(u)}`,
+                    (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+                    (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
                     (u) => `https://thingproxy.freeboard.io/fetch/${u}`
                 ];
 
-                // Strategy: Try each proxy with multiple attempts
-                for (let pIndex = 0; pIndex < proxies.length; pIndex++) {
-                    const getProxy = proxies[pIndex];
-                    
-                    // Progressive timeouts for each proxy
-                    const timeouts = [10000, 15000]; 
+                // racing function to speed up loading
+                async function fetchWithProxy(getProxy, targetUrl, timeoutMs) {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+                    try {
+                        const finalUrl = getProxy(targetUrl);
+                        const response = await fetch(finalUrl, {
+                            signal: controller.signal,
+                            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                        });
+                        clearTimeout(timeoutId);
+                        if (!response.ok) throw new Error(`Status ${response.status}`);
+                        const result = await response.text();
 
-                    for (let attempt = 0; attempt < timeouts.length; attempt++) {
-                        try {
-                            const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), timeouts[attempt]);
-
-                            const finalUrl = getProxy(downloadUrl);
-                            const response = await fetch(finalUrl, { 
-                                signal: controller.signal,
-                                headers: { 'X-Requested-With': 'XMLHttpRequest' }
-                            });
-                            clearTimeout(timeoutId);
-
-                            if (response.ok) {
-                                const result = await response.text();
-
-                                // Check if it's a Google Drive confirmation page (often for large files/CSV)
-                                if (result.includes("confirm=") && (result.includes("drive.google.com") || result.includes("Google Drive"))) {
-                                    // Try different regex patterns for the token
-                                    const confirmToken = result.match(/confirm=([a-zA-Z0-9_-]+)/)?.[1] || 
-                                                         result.match(/id="confirm-button".*?href=.*?confirm=([a-zA-Z0-9_-]+)/)?.[1];
-                                    
-                                    if (confirmToken) {
-                                        // Update the base download URL with the token and retry immediately with the SAME proxy
-                                        if (!downloadUrl.includes('confirm=')) {
-                                            downloadUrl += `&confirm=${confirmToken}`;
-                                            console.log("Adding GD confirmation token and retrying...");
-                                            // Reset attempts for this proxy to try again with the token
-                                            attempt = -1; 
-                                            continue;
-                                        }
-                                    }
-                                }
-
-                                // Check if it's actually valid content (not an HTML error page or virus warning)
-                                if (result && result.trim() !== "" && !result.includes("<!DOCTYPE html>") && !result.includes("document.location.href")) {
-                                    text = result;
-                                    break;
-                                } else if (result.includes("Google Drive - Virus scan warning")) {
-                                    console.warn("Virus scan warning detected. Attempting to bypass...");
-                                    // The confirm logic above should handle this, but if not, we log it
-                                }
-                            } else {
-                                lastError = `Status ${response.status}`;
+                        // Handle Google Drive confirmation page
+                        if (result.includes("confirm=") && (result.includes("drive.google.com") || result.includes("Google Drive") || result.includes("Virus scan warning"))) {
+                            const confirmToken = result.match(/confirm=([a-zA-Z0-9_-]+)/)?.[1] ||
+                                result.match(/id="confirm-button".*?href=.*?confirm=([a-zA-Z0-9_-]+)/)?.[1] ||
+                                result.match(/confirm=([^&"]+)/)?.[1];
+                            if (confirmToken && !targetUrl.includes('confirm=')) {
+                                return await fetchWithProxy(getProxy, targetUrl + `&confirm=${confirmToken}`, timeoutMs + 5000);
                             }
-                        } catch (e) {
-                            console.warn(`Proxy ${pIndex} attempt ${attempt + 1} failed:`, e.name === 'AbortError' ? 'Timeout' : e.message);
-                            lastError = e.message;
                         }
-                        
-                        if (text) break;
-                        // Wait slightly before next attempt
-                        await new Promise(r => setTimeout(r, 800));
+
+                        // Validate content
+                        if (result && result.trim() !== "" && !result.includes("<!DOCTYPE html>") && !result.includes("document.location.href")) {
+                            return result;
+                        }
+                        throw new Error("Invalid content received");
+                    } catch (e) {
+                        clearTimeout(timeoutId);
+                        throw e;
                     }
-                    if (text) break;
+                }
+
+                // Race the first 2 proxies for maximum speed
+                try {
+                    const p1 = fetchWithProxy(proxies[0], downloadUrl, 8000);
+                    // Start second proxy after a short delay if p1 is slow
+                    const p2 = new Promise((resolve, reject) => {
+                        setTimeout(() => {
+                            fetchWithProxy(proxies[1], downloadUrl, 10000).then(resolve).catch(reject);
+                        }, 2000);
+                    });
+
+                    text = await Promise.any([p1, p2]);
+                } catch (e) {
+                    console.warn("Primary race failed, trying sequential backups...");
+                    // Sequential fallback for remaining proxies
+                    for (let i = 2; i < proxies.length; i++) {
+                        try {
+                            text = await fetchWithProxy(proxies[i], downloadUrl, 12000);
+                            if (text) break;
+                        } catch (err) {
+                            lastError = err.message;
+                            continue;
+                        }
+                    }
                 }
 
                 if (!text || text.trim() === "") {
                     let msg = "Could not reach the file. ";
                     if (url.includes("drive.google.com") || url.includes("docs.google.com")) {
-                        msg += "\n\nTips for Google Drive:\n1. Ensure 'Anyone with the link' can View.\n2. Ensure it's a CSV file or Google Sheet.\n3. Large files or many requests may cause temporary blocks.";
+                        msg += "\n\nTips for Google Drive:\n1. Ensure 'Anyone with the link' can View.\n2. Ensure it's a CSV file or Google Sheet.\n3. Large files may require a moment to process.";
                     } else {
                         msg += "The server might be down or blocking the request. " + (lastError ? `(${lastError})` : "");
                     }
                     throw new Error(msg);
                 }
 
-                // Clear safety timeout if it exists
                 if (window._loadTimeout) {
                     clearTimeout(window._loadTimeout);
                     window._loadTimeout = null;
@@ -1388,13 +1385,13 @@
                     // Try to use the current host if it's sri-guru-dakshinamurthy to avoid CORS, otherwise use the absolute URL
                     const baseDataUrl = window.location.hostname.includes('sri-guru-dakshinamurthy') ? '' : 'https://sri-guru-dakshinamurthy.pages.dev';
                     const dataUrl = `${baseDataUrl}/data/class-${classId}.json`;
-                    
+
                     const controller = new AbortController();
                     const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout for index fetch
-                    
+
                     const response = await fetch(dataUrl, { signal: controller.signal });
                     clearTimeout(timeoutId);
-                    
+
                     if (!response.ok) throw new Error(`Could not find class data (Status ${response.status}).`);
 
                     const classData = await response.json();
